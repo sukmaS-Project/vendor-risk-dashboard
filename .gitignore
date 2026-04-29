@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+output_modeling/
+output_prediksi/
+output_data_understanding/
+output_data_preparation/
+output_7eksperimen/*.png
+output_7eksperimen/*.csv
+*.log
