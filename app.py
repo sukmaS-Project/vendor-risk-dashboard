@@ -25,7 +25,7 @@ import numpy as np
 import pickle
 import io
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 import plotly.express as px
 
@@ -1241,7 +1241,7 @@ def main():
         <div>
             <h2>📊 {menu}</h2>
         </div>
-        <span>{datetime.now().strftime('%d %B %Y, %H:%M')}
+        <span>{datetime.now(timezone(timedelta(hours=7))).strftime('%d %B %Y %H:%M WIB')}
               &nbsp;|&nbsp; {role}</span>
     </div>""", unsafe_allow_html=True)
 
