@@ -18,6 +18,10 @@ import pandas as pd
 import numpy as np
 import pickle
 import warnings
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import itertools
 from pathlib import Path
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
@@ -38,10 +42,32 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 RANDOM_STATE = 42
 
 # ─────────────────────────────────────────────
-# DEFINISI FITUR
+# DEFINISI FITUR — HASIL SELEKSI EMPIRIS
 # ─────────────────────────────────────────────
+# Metodologi seleksi (file: seleksi_fitur.py):
+#   Tahap 1 : Korelasi Spearman |r|≥0.20, p<0.05
+#             + identifikasi floor-effect (≥70% nilai=0)
+#             Referensi: Cohen (1988)
+#   Tahap 2 : Multikolinearitas |r|<0.80
+#             Referensi: Hastie et al. (2009)
+#   Tahap 3 : Feature importance pilot RF, cumulative ≥90%
+#             class_weight=balanced
+#             Referensi: Kuhn & Johnson (2019)
+#   Tahap 4 : Verifikasi CV F1 Macro — 3 skenario
+#
+# Lag diverifikasi 100% identik dengan kolom Excel
+# (file: verifikasi_lag_korelasi.py, 1078/1078 identik)
+# Referensi: hitung_lag_python() — cari vendor+bulan-1+tahun
 
-# Fitur tanpa lag (7 fitur)
+# ─────────────────────────────────────────────────────────────
+# FITUR — SESUAI LAPORAN PENELITIAN (RF EKS.4)
+# Proses seleksi fitur didokumentasikan di:
+#   eda_seleksi_fitur.py  → distribusi & korelasi Spearman
+#   seleksi_fitur.py      → filter + multikolinearitas + pilot RF
+#   verifikasi_lag_korelasi.py → verifikasi lag Python vs Excel
+# ─────────────────────────────────────────────────────────────
+
+# 7 fitur non-lag
 FEATURES_NOLAG = [
     'Proportion Delay',
     'Proportion Gap',
@@ -52,7 +78,9 @@ FEATURES_NOLAG = [
     'Mean Gap (X14)',
 ]
 
-# Fitur lag (6 fitur)
+# 6 fitur lag (nama kolom PERSIS sesuai Data.xlsx)
+# Lag terverifikasi 100% identik dengan rumus Excel
+# (1078/1078 pasangan — verifikasi_lag_korelasi.py)
 FEATURES_LAG = [
     'Lag Proportion Delay',
     'Lag Proportion Gap',
@@ -62,7 +90,7 @@ FEATURES_LAG = [
     'Lag Mean Gap (X14)',
 ]
 
-# Fitur dengan lag (13 fitur)
+# 13 fitur total (7 non-lag + 6 lag)
 FEATURES_WITHLAG = FEATURES_NOLAG + FEATURES_LAG
 
 LABEL_MAP  = {'Patuh': 0, 'Waspada': 1, 'Kritis': 2}
@@ -88,6 +116,12 @@ print("  Distribusi kelas:")
 for label, code in LABEL_MAP.items():
     n = (y == code).sum()
     print(f"    {label:10s}: {n} ({n/len(y)*100:.1f}%)")
+
+# Validasi kolom lag tersedia di Data.xlsx
+print("\n  Validasi kolom lag di Data.xlsx:")
+for lag_col in FEATURES_LAG:
+    ada = lag_col in df.columns
+    print(f"    '{lag_col}': {'✅ ADA' if ada else '❌ TIDAK ADA'}")
 
 # ─────────────────────────────────────────────
 # FUNGSI HELPER
@@ -441,6 +475,237 @@ if hasattr(best['model'], 'feature_importances_'):
     for feat, imp in fi[:8]:
         bar = '█' * int(imp * 40)
         print(f"    {feat:35s} {imp:.4f} {bar}")
+
+# ─────────────────────────────────────────────
+# VISUALISASI KOMPREHENSIF
+# ─────────────────────────────────────────────
+print("\n" + "=" * 65)
+print("  MEMBUAT VISUALISASI")
+print("=" * 65)
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
+fig = plt.figure(figsize=(22, 16), facecolor='white')
+fig.suptitle(
+    '7 Eksperimen Klasifikasi Risiko Vendor TAD\n'
+    'Perbandingan Algoritma, Lag Features, dan Class Weight',
+    fontsize=15, fontweight='bold', color='#1B2A47', y=1.01
+)
+
+COLORS = {
+    'DT':  '#64748B',
+    'RF':  '#185FA5',
+    'XGB': '#2E7D9E',
+}
+COLOR_BEST  = '#3A8C6E'
+COLOR_WARN  = '#E24B4A'
+eks_labels  = [f"Eks.{r['no']}" for r in hasil_semua]
+
+# ── Panel 1: CV F1 per eksperimen ────────────────────────────
+ax1 = fig.add_subplot(3, 3, 1)
+cv_vals  = [r['cv_f1']   for r in hasil_semua]
+test_vals= [r['test_f1'] for r in hasil_semua]
+x = np.arange(7)
+w = 0.35
+bars_cv   = ax1.bar(x-w/2, cv_vals,  w, label='CV F1',
+                    color='#185FA5', alpha=0.85,
+                    edgecolor='white', lw=1.5)
+bars_test = ax1.bar(x+w/2, test_vals,w, label='Test F1',
+                    color='#3A8C6E', alpha=0.85,
+                    edgecolor='white', lw=1.5)
+for bar, val in list(zip(bars_cv, cv_vals)) + list(zip(bars_test, test_vals)):
+    ax1.text(bar.get_x()+bar.get_width()/2.,
+             bar.get_height()+0.008,
+             f'{val:.3f}', ha='center', va='bottom',
+             fontsize=7.5, fontweight='bold')
+# Highlight best
+best_x = best['no'] - 1
+ax1.bar(best_x-w/2, cv_vals[best_x], w,
+        color=COLOR_BEST, alpha=0.95,
+        edgecolor='gold', lw=2.5)
+ax1.set_xticks(x)
+ax1.set_xticklabels(eks_labels, fontsize=9)
+ax1.set_ylim(0, 1.12)
+ax1.set_ylabel('F1-Score Macro', fontsize=9)
+ax1.set_title('CV F1 vs Test F1\nper Eksperimen', fontsize=10, fontweight='bold')
+ax1.legend(fontsize=8)
+ax1.grid(axis='y', alpha=0.3)
+ax1.spines[['top','right']].set_visible(False)
+ax1.text(best_x, 1.07, '★ TERBAIK', ha='center',
+         fontsize=8, color=COLOR_BEST, fontweight='bold')
+
+# ── Panel 2: Gap CV-Test ─────────────────────────────────────
+ax2 = fig.add_subplot(3, 3, 2)
+gaps  = [r['gap'] for r in hasil_semua]
+gcol  = [COLOR_WARN if g > 0.10 else '#185FA5' for g in gaps]
+bars2 = ax2.bar(x, gaps, color=gcol, edgecolor='white', lw=1.5)
+for bar, val in zip(bars2, gaps):
+    ax2.text(bar.get_x()+bar.get_width()/2.,
+             val+0.003, f'{val:.3f}',
+             ha='center', va='bottom', fontsize=8, fontweight='bold')
+ax2.axhline(y=0.10, color=COLOR_WARN, lw=1.8,
+            linestyle='--', label='Batas stabil (0.10)')
+ax2.set_xticks(x)
+ax2.set_xticklabels(eks_labels, fontsize=9)
+ax2.set_ylabel('|CV F1 - Test F1|', fontsize=9)
+ax2.set_title('Gap CV-Test\n(< 0.10 = Stabil)', fontsize=10, fontweight='bold')
+ax2.legend(fontsize=8)
+ax2.grid(axis='y', alpha=0.3)
+ax2.spines[['top','right']].set_visible(False)
+p_ok  = mpatches.Patch(color='#185FA5', label='Stabil ✅')
+p_ng  = mpatches.Patch(color=COLOR_WARN, label='Tidak stabil ⚠️')
+ax2.legend(handles=[p_ok, p_ng], fontsize=8)
+
+# ── Panel 3: F1 per kelas model terbaik ──────────────────────
+ax3 = fig.add_subplot(3, 3, 3)
+kelas  = ['Patuh', 'Waspada', 'Kritis']
+kvals  = [best['f1_patuh'], best['f1_waspada'], best['f1_kritis']]
+kcol   = ['#3A8C6E', '#BA7517', '#E24B4A']
+bars3  = ax3.barh(kelas, kvals, color=kcol,
+                   edgecolor='white', lw=1.5)
+for bar, val in zip(bars3, kvals):
+    ax3.text(val+0.01, bar.get_y()+bar.get_height()/2.,
+             f'{val:.3f}', va='center', fontsize=10, fontweight='bold')
+ax3.set_xlim(0, 1.15)
+ax3.set_xlabel('F1-Score', fontsize=9)
+ax3.set_title(f'F1-Score per Kelas\nEks.{best["no"]} {best["algoritma"]} (Model Terbaik)',
+              fontsize=10, fontweight='bold')
+ax3.grid(axis='x', alpha=0.3)
+ax3.spines[['top','right']].set_visible(False)
+
+# ── Panel 4: Confusion Matrix model terbaik ───────────────────
+ax4 = fig.add_subplot(3, 3, 4)
+cm_best = best['cm']
+im = ax4.imshow(cm_best, cmap='Blues')
+ax4.set_xticks([0,1,2]); ax4.set_yticks([0,1,2])
+ax4.set_xticklabels(CLASS_NAMES, fontsize=9)
+ax4.set_yticklabels(CLASS_NAMES, fontsize=9)
+ax4.set_xlabel('Prediksi', fontsize=9)
+ax4.set_ylabel('Aktual', fontsize=9)
+ax4.set_title(f'Confusion Matrix\nEks.{best["no"]} — {best["algoritma"]}',
+              fontsize=10, fontweight='bold')
+for i in range(3):
+    for j in range(3):
+        val_cm = cm_best[i,j]
+        ax4.text(j, i, str(val_cm), ha='center', va='center',
+                 fontsize=13, fontweight='bold',
+                 color='white' if val_cm > cm_best.max()/2 else '#1B2A47')
+plt.colorbar(im, ax=ax4)
+
+# ── Panel 5: Feature Importance model terbaik ────────────────
+ax5 = fig.add_subplot(3, 3, 5)
+if hasattr(best['model'], 'feature_importances_'):
+    fi_pairs = sorted(
+        zip(best['fitur'], best['model'].feature_importances_),
+        key=lambda x: x[1], reverse=True
+    )
+    fi_lbl = [p[0].replace('Lag_','[Lag] ')
+               .replace('Mean ','').replace('Max ','Max_')
+               .replace('Proportion ','Prop_')
+               .replace(' Komposit','_K') for p in fi_pairs]
+    fi_val = [p[1] for p in fi_pairs]
+    fi_col = ['#2E7D9E' if '[Lag]' in l else '#185FA5'
+               for l in fi_lbl]
+    ax5.barh(range(len(fi_lbl)), fi_val, color=fi_col,
+              edgecolor='white', lw=1.2)
+    for i, val in enumerate(fi_val):
+        ax5.text(val+0.003, i, f'{val:.4f}',
+                 va='center', fontsize=8)
+    ax5.set_yticks(range(len(fi_lbl)))
+    ax5.set_yticklabels(fi_lbl, fontsize=8)
+    ax5.invert_yaxis()
+    ax5.set_xlabel('Importance', fontsize=9)
+    ax5.set_title(f'Feature Importance\nEks.{best["no"]}',
+                  fontsize=10, fontweight='bold')
+    p_nl = mpatches.Patch(color='#185FA5', label='Non-lag')
+    p_lg = mpatches.Patch(color='#2E7D9E', label='Lag')
+    ax5.legend(handles=[p_nl, p_lg], fontsize=8)
+    ax5.grid(axis='x', alpha=0.3)
+    ax5.spines[['top','right']].set_visible(False)
+
+# ── Panel 6: Kontribusi Lag (CV F1) ──────────────────────────
+ax6 = fig.add_subplot(3, 3, 6)
+# RF: Eks2 vs Eks3 vs Eks4
+# XGB: Eks5 vs Eks6 vs Eks7
+r2,r3,r4 = get(2),get(3),get(4)
+r5,r6,r7 = get(5),get(6),get(7)
+
+grp_x = np.arange(3)
+w6 = 0.35
+rf_vals  = [r2['cv_f1'], r3['cv_f1'], r4['cv_f1']]
+xgb_vals = [r5['cv_f1'], r6['cv_f1'], r7['cv_f1']]
+b_rf  = ax6.bar(grp_x-w6/2, rf_vals,  w6, label='RF',
+                color='#185FA5', alpha=0.85,
+                edgecolor='white', lw=1.5)
+b_xgb = ax6.bar(grp_x+w6/2, xgb_vals, w6, label='XGBoost',
+                color='#2E7D9E', alpha=0.85,
+                edgecolor='white', lw=1.5)
+for bar, val in list(zip(b_rf,rf_vals))+list(zip(b_xgb,xgb_vals)):
+    ax6.text(bar.get_x()+bar.get_width()/2.,
+             val+0.005, f'{val:.3f}',
+             ha='center', va='bottom', fontsize=8, fontweight='bold')
+ax6.set_xticks(grp_x)
+ax6.set_xticklabels(['Tanpa lag\nTanpa CW',
+                     'Dengan lag\nTanpa CW',
+                     'Dengan lag\nDengan CW'], fontsize=8)
+ax6.set_ylabel('CV Macro F1', fontsize=9)
+ax6.set_ylim(0, 1.12)
+ax6.set_title('Kontribusi Lag & Class Weight\nRF vs XGBoost',
+              fontsize=10, fontweight='bold')
+ax6.legend(fontsize=8)
+ax6.grid(axis='y', alpha=0.3)
+ax6.spines[['top','right']].set_visible(False)
+
+# ── Panel 7: Summary semua 7 eksperimen (tabel visual) ────────
+ax7 = fig.add_subplot(3, 1, 3)
+ax7.axis('off')
+col_names = ['Eks','Algoritma','Lag','CW','N Fitur',
+             'CV F1','Test F1','Gap','Patuh','Waspada','Kritis','Status']
+rows_tbl = []
+for r in hasil_semua:
+    lag_short = 'Dengan' if r['lag']=='Dengan lag' else 'Tanpa'
+    cw_short  = 'Dengan' if r['cw']=='Dengan CW'  else 'Tanpa'
+    stab      = ('★ TERBAIK' if r['no']==best['no']
+                 else '⚠ Tidak stabil' if r['gap']>0.10 else '✓ Stabil')
+    rows_tbl.append([
+        f"Eks.{r['no']}", r['algoritma'], lag_short, cw_short,
+        str(r['n_fitur']),
+        f"{r['cv_f1']:.4f}", f"{r['test_f1']:.4f}",
+        f"{r['gap']:.4f}", f"{r['f1_patuh']:.3f}",
+        f"{r['f1_waspada']:.3f}", f"{r['f1_kritis']:.3f}",
+        stab
+    ])
+
+tbl = ax7.table(cellText=rows_tbl, colLabels=col_names,
+                loc='center', cellLoc='center')
+tbl.auto_set_font_size(False)
+tbl.set_fontsize(9)
+tbl.scale(1, 1.6)
+
+# Warna header
+for j in range(len(col_names)):
+    tbl[(0,j)].set_facecolor('#1B2A47')
+    tbl[(0,j)].set_text_props(color='white', fontweight='bold')
+
+# Warna baris
+for i, r in enumerate(hasil_semua, 1):
+    bg = '#EAF7EF' if r['no']==best['no'] else (
+         '#FEF3F2' if r['gap']>0.10 else '#F8FAFC')
+    for j in range(len(col_names)):
+        tbl[(i,j)].set_facecolor(bg)
+
+ax7.set_title('Tabel Perbandingan 7 Eksperimen Lengkap',
+              fontsize=11, fontweight='bold', color='#1B2A47', pad=12)
+
+plt.tight_layout()
+out_viz = OUTPUT_DIR / 'visualisasi_7eksperimen.png'
+plt.savefig(str(out_viz), dpi=150,
+            bbox_inches='tight', facecolor='white')
+plt.close()
+print(f"  ✔ {out_viz}")
 
 # ─────────────────────────────────────────────
 # SIMPAN HASIL
